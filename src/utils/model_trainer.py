@@ -124,10 +124,18 @@ class StockPredictor:
             raise ModelError(f"Failed to build model: {str(e)}")
 
     def _unwrap(self) -> nn.Module:
-        """Get the underlying module, unwrapping DataParallel/compile wrappers for state_dict I/O"""
+        """Get the underlying module, unwrapping DataParallel/compile wrappers for state_dict I/O.
+
+        torch.compile() wraps the module in an OptimizedModule whose
+        state_dict keys are prefixed with '_orig_mod.' - without stripping
+        that here, a state_dict saved from a compiled model can't be loaded
+        into a freshly-built (not yet compiled) or exported module.
+        """
         model = self.model
         if isinstance(model, nn.DataParallel):
             model = model.module
+        if hasattr(model, '_orig_mod'):
+            model = model._orig_mod
         return model
 
     def _gradient_accumulation_steps(self) -> int:
@@ -262,6 +270,47 @@ class StockPredictor:
             'dropout': self.dropout,
         })
         self.model_path, self.scaler_path = model_path, scaler_path
+
+    def _export_ready_model(self) -> nn.Module:
+        """A fresh, uncompiled CPU copy of the current weights - safe to
+        trace/export regardless of whether self.model is wrapped in
+        DataParallel or torch.compile's OptimizedModule."""
+        if self.model is None:
+            raise ModelError("No model to export; train or load a model first")
+        export_model = _LSTMNet(self.n_features, self.hidden_sizes, self.fc_sizes, self.dropout)
+        export_model.load_state_dict(self._unwrap().state_dict())
+        export_model.eval()
+        return export_model
+
+    def export_torchscript(self, path: str) -> None:
+        """Export a TorchScript module for serving independent of this training code/environment"""
+        export_model = self._export_ready_model()
+        example_input = torch.randn(1, self.sequence_length, self.n_features)
+        traced = torch.jit.trace(export_model, example_input)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        traced.save(path)
+        logger.info(f"Exported TorchScript model to {path}")
+
+    def export_onnx(self, path: str) -> None:
+        """Export an ONNX model for serving independent of this training code/environment"""
+        export_model = self._export_ready_model()
+        example_input = torch.randn(1, self.sequence_length, self.n_features)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # torch.onnx's exporter prints unicode status glyphs; on a Windows
+        # console with a non-UTF-8 code page (the default), that print can
+        # itself raise UnicodeEncodeError after the export already
+        # succeeded - report success from the file's existence, not just a
+        # clean return, so that doesn't look like a real failure.
+        try:
+            torch.onnx.export(
+                export_model, example_input, path,
+                input_names=['sequence'], output_names=['predicted_close'],
+                dynamic_axes={'sequence': {0: 'batch_size'}, 'predicted_close': {0: 'batch_size'}}
+            )
+        except UnicodeEncodeError:
+            if not os.path.exists(path):
+                raise
+        logger.info(f"Exported ONNX model to {path}")
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
         """Make predictions"""

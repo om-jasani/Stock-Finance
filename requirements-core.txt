@@ -1,0 +1,41 @@
+# Core data/ML dependencies - no GUI required.
+# Use this file alone for headless training/inference (scripts/, Docker,
+# a remote GPU server). requirements-gui.txt layers the desktop app on top.
+
+# Core Dependencies
+numpy
+pandas
+pyarrow  # parquet engine, required for the on-disk data cache
+python-dotenv
+
+# Machine Learning
+# torch must be installed separately first with the CUDA-enabled wheel index
+# for your platform, e.g. on this machine (NVIDIA RTX 3050, Windows):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# See https://pytorch.org/get-started/locally/ for other platforms/CUDA versions.
+torch
+onnx
+onnxscript  # required by torch.onnx.export for model deployment/export
+scikit-learn
+lightgbm
+optuna
+
+# Data Sources
+yfinance
+alpha_vantage
+finnhub-python
+
+# Visualization (used for chart export, not just the desktop GUI)
+plotly
+matplotlib
+
+# Testing
+pytest
+pytest-cov
+
+# Utilities
+requests
+tqdm
+joblib
+scipy
+statsmodels
