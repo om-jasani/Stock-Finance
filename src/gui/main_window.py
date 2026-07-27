@@ -2,8 +2,9 @@
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                          QPushButton, QComboBox, QLabel, QStackedWidget,
                          QLineEdit, QCompleter)
-from PyQt6.QtCore import Qt, pyqtSlot, QThread, pyqtSignal, QStringListModel
+from PyQt6.QtCore import Qt, pyqtSlot, QObject, pyqtSignal, QStringListModel
 import os
+import threading
 import yfinance as yf
 from .widget_manager import WidgetManager
 from .styles.colors import ColorScheme, StyleConstants
@@ -16,20 +17,35 @@ _COMMON_SYMBOLS = ["AAPL", "GOOGL", "MSFT", "AMZN", "META", "TSLA", "NVDA",
                     "AMD", "INTC", "IBM", "NFLX", "DIS", "V", "MA", "JPM"]
 
 
-class StockSearchThread(QThread):
-    """Background thread for stock symbol search"""
+class StockSearchThread(QObject):
+    """Background stock symbol search.
+
+    Deliberately a QObject driving a plain threading.Thread rather than a
+    QThread subclass - see workers.py's docstring: yfinance's curl_cffi
+    backend segfaults when called inside QThread.run(). PyQt signals emit
+    correctly from any Python thread, so this keeps the same interface
+    (start/cancel/resultReady) without that crash.
+    """
     resultReady = pyqtSignal(list)
 
     def __init__(self, query):
         super().__init__()
         self.query = query
         self._cancelled = False
+        self._thread = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def isRunning(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
 
     def cancel(self):
         """Cooperative cancellation flag (QThread.terminate() is unsafe)"""
         self._cancelled = True
 
-    def run(self):
+    def _run(self):
         try:
             matches = []
             query_upper = self.query.upper().strip()

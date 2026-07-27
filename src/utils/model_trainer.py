@@ -104,7 +104,7 @@ class StockPredictor:
     def build_model(self, input_shape: Tuple[int, int]) -> None:
         """Build LSTM model architecture. input_shape = (sequence_length, n_features)"""
         try:
-            self.n_features = input_shape[1]
+            sequence_length, self.n_features = input_shape
             model = _LSTMNet(self.n_features, self.hidden_sizes, self.fc_sizes, self.dropout).to(self.device)
 
             if torch.cuda.device_count() > 1:
@@ -112,16 +112,36 @@ class StockPredictor:
                 model = nn.DataParallel(model)
 
             if self.device.type == 'cuda':
-                try:
-                    model = torch.compile(model)
-                except Exception as e:
-                    logger.warning(f"torch.compile unavailable, using eager mode: {e}")
+                compiled = torch.compile(model)
+                if self._compile_smoke_test(compiled, sequence_length):
+                    model = compiled
+                else:
+                    logger.warning("torch.compile produced a non-working graph on this "
+                                  "GPU/driver (e.g. missing Triton); using eager mode instead")
 
             self.model = model
 
         except Exception as e:
             logger.error(f"Error building model: {str(e)}")
             raise ModelError(f"Failed to build model: {str(e)}")
+
+    def _compile_smoke_test(self, compiled_model: nn.Module, sequence_length: int) -> bool:
+        """torch.compile() only wraps the module - actual compilation happens lazily on
+        the first real forward/backward pass, so a bad Triton/Inductor setup on this
+        machine wouldn't surface until partway through real training. Exercise both
+        passes with dummy data here so a failure is caught and can fall back to eager
+        mode before training starts, not partway through it."""
+        try:
+            dummy_x = torch.randn(2, sequence_length, self.n_features, device=self.device)
+            dummy_y = torch.randn(2, device=self.device)
+            out = compiled_model(dummy_x).squeeze(-1)
+            loss = nn.functional.huber_loss(out, dummy_y)
+            loss.backward()
+            compiled_model.zero_grad()
+            return True
+        except Exception as e:
+            logger.warning(f"torch.compile smoke test failed: {e}")
+            return False
 
     def _unwrap(self) -> nn.Module:
         """Get the underlying module, unwrapping DataParallel/compile wrappers for state_dict I/O.

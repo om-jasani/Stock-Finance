@@ -2,11 +2,12 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                          QFrame, QLabel, QSpinBox, QProgressBar, QMessageBox, QComboBox)
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtCore import pyqtSlot, QThread, pyqtSignal, QUrl
+from PyQt6.QtCore import pyqtSlot, QObject, pyqtSignal, QUrl
 import pandas as pd
 import numpy as np
 from datetime import datetime
 import os
+import threading
 import tempfile
 from ...utils.data_fetcher import DataFetcher
 from ...utils.model_trainer import StockPredictor
@@ -15,8 +16,14 @@ from ...utils.model_manager import ModelManager
 from ...utils.logger import logger
 from ...utils.config import Config
 
-class TrainingWorker(QThread):
-    """Worker thread for model training"""
+class TrainingWorker(QObject):
+    """Background model training.
+
+    A QObject driving a plain threading.Thread rather than a QThread
+    subclass - see workers.py's docstring: yfinance's curl_cffi backend
+    (used here via DataFetcher) segfaults when called inside
+    QThread.run(). PyQt signals emit correctly from any Python thread.
+    """
     progress = pyqtSignal(int)
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
@@ -28,8 +35,13 @@ class TrainingWorker(QThread):
         self.model_type = model_type
         self.data_fetcher = DataFetcher()
         self.model = StockPredictor() if model_type == 'lstm' else GBMPredictor()
+        self._thread = None
 
-    def run(self):
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
         try:
             # Fetch training data
             df = self.data_fetcher.get_stock_data(

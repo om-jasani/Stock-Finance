@@ -26,3 +26,8 @@ Thumbs.db
 # ONNX/TorchScript export scratch (regenerate on demand)
 *.onnx
 *.torchscript
+
+# Test caches
+.pytest_cache/
+htmlcov/
+.coverage
