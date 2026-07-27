@@ -2,11 +2,14 @@
 import os
 import json
 import shutil
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from datetime import datetime
 from .model_trainer import StockPredictor
+from .gbm_predictor import GBMPredictor
 from .logger import logger
 from .config import Config
+
+Predictor = Union[StockPredictor, GBMPredictor]
 
 class ModelManager:
     """Manage model lifecycle and storage"""
@@ -37,61 +40,73 @@ class ModelManager:
         except Exception as e:
             logger.error(f"Error saving model metadata: {str(e)}")
             
-    def save_model(self, 
-                  symbol: str, 
-                  model: StockPredictor,
+    def save_model(self,
+                  symbol: str,
+                  model: Predictor,
                   metrics: Dict[str, float],
-                  version: Optional[str] = None) -> str:
-        """Save trained model"""
+                  version: Optional[str] = None,
+                  model_type: str = 'lstm') -> str:
+        """Save a trained model (either an LSTM StockPredictor or a GBMPredictor)"""
         try:
+            if model_type not in ('lstm', 'gbm'):
+                raise ValueError(f"Unknown model_type: {model_type}")
+
             # Generate model ID
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            model_id = f"{symbol}_{timestamp}"
-            
+            model_id = f"{symbol}_{model_type}_{timestamp}"
+
             # Create model directory
             model_dir = os.path.join(self.models_dir, model_id)
             os.makedirs(model_dir, exist_ok=True)
-            
-            # Save model files
-            model_path = os.path.join(model_dir, 'model.keras')
-            scaler_path = os.path.join(model_dir, 'scalers.pkl')
-            
-            # Save model and scalers
-            model.model.save(model_path)
-            model.data_pipeline.save_scalers(scaler_path)
-            
-            # Update metadata
-            self.metadata[model_id] = {
+
+            entry = {
                 'symbol': symbol,
+                'model_type': model_type,
                 'version': version or '1.0.0',
                 'created_at': datetime.now().isoformat(),
                 'metrics': metrics,
-                'model_path': model_path,
-                'scaler_path': scaler_path,
                 'status': 'active'
             }
-            
+
+            if model_type == 'lstm':
+                model_path = os.path.join(model_dir, 'model.pt')
+                scaler_path = os.path.join(model_dir, 'scalers.pkl')
+                model.save(model_path, scaler_path)
+                entry['model_path'] = model_path
+                entry['scaler_path'] = scaler_path
+            else:
+                model_path = os.path.join(model_dir, 'model.pkl')
+                model.save(model_path)
+                entry['model_path'] = model_path
+
+            self.metadata[model_id] = entry
             self._save_metadata()
             return model_id
-            
+
         except Exception as e:
             logger.error(f"Error saving model: {str(e)}")
             raise
-            
-    def load_model(self, model_id: str) -> Optional[StockPredictor]:
+
+    def load_model(self, model_id: str) -> Optional[Predictor]:
         """Load model by ID"""
         try:
             if model_id not in self.metadata:
                 return None
-                
+
             model_info = self.metadata[model_id]
             if model_info['status'] != 'active':
                 return None
 
-            model = StockPredictor(
-                model_path=model_info['model_path'],
-                scaler_path=model_info.get('scaler_path')
-            )
+            # Metadata written before model_type existed is always an LSTM model
+            model_type = model_info.get('model_type', 'lstm')
+
+            if model_type == 'gbm':
+                model = GBMPredictor(model_path=model_info['model_path'])
+            else:
+                model = StockPredictor(
+                    model_path=model_info['model_path'],
+                    scaler_path=model_info.get('scaler_path')
+                )
 
             if model.load_model():
                 return model
@@ -101,21 +116,22 @@ class ModelManager:
             logger.error(f"Error loading model {model_id}: {str(e)}")
             return None
 
-    def get_latest_model_id(self, symbol: str) -> Optional[str]:
+    def get_latest_model_id(self, symbol: str, model_type: Optional[str] = None) -> Optional[str]:
         """Get the ID of the latest active model for a symbol, without loading it"""
         try:
             symbol_models = [
                 model_id for model_id, info in self.metadata.items()
                 if info['symbol'] == symbol and info['status'] == 'active'
+                and (model_type is None or info.get('model_type', 'lstm') == model_type)
             ]
             return max(symbol_models) if symbol_models else None
         except Exception as e:
             logger.error(f"Error getting latest model id for {symbol}: {str(e)}")
             return None
 
-    def get_latest_model(self, symbol: str) -> Optional[StockPredictor]:
+    def get_latest_model(self, symbol: str, model_type: Optional[str] = None) -> Optional[Predictor]:
         """Get latest model for symbol"""
-        latest_id = self.get_latest_model_id(symbol)
+        latest_id = self.get_latest_model_id(symbol, model_type)
         return self.load_model(latest_id) if latest_id else None
             
     def delete_model(self, model_id: str) -> bool:
@@ -219,8 +235,9 @@ class ModelManager:
                     # Calculate storage size
                     if os.path.exists(info['model_path']):
                         total_size += os.path.getsize(info['model_path'])
-                    if os.path.exists(info['scaler_path']):
-                        total_size += os.path.getsize(info['scaler_path'])
+                    scaler_path = info.get('scaler_path')
+                    if scaler_path and os.path.exists(scaler_path):
+                        total_size += os.path.getsize(scaler_path)
                         
             return {
                 'total_models': model_count,

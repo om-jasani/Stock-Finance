@@ -2,6 +2,7 @@
 import yfinance as yf
 import pandas as pd
 from typing import Optional, Dict, Any, Tuple
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 from .cache import DataCache
@@ -10,28 +11,38 @@ from .logger import logger
 from .validation import validate_stock_data
 from .config import Config
 
+# Approximate day-count for period strings, used only to size fallback
+# provider date ranges (yfinance's own period parsing is unaffected)
+_PERIOD_DAYS = {
+    '1d': 1, '5d': 5, '1mo': 30, '3mo': 90, '6mo': 180,
+    '1y': 365, '2y': 730, '5y': 1825, '10y': 3650, 'max': 3650
+}
+
 class DataFetcher:
     """Utility class for fetching stock market data"""
-    
+
     def __init__(self):
         """Initialize DataFetcher"""
         self.cache = DataCache()
         self.batch_size = 5  # Number of symbols to fetch in parallel
-        
-    def get_stock_data(self, 
-                      symbol: str, 
-                      period: str = '1d', 
+
+    def get_stock_data(self,
+                      symbol: str,
+                      period: str = '1d',
                       interval: str = '5m',
                       use_cache: bool = True) -> Optional[pd.DataFrame]:
         """
-        Fetch stock data for given symbol
-        
+        Fetch stock data for given symbol. Falls back to Alpha Vantage, then
+        Finnhub, for daily-interval requests if yfinance fails or rate-limits
+        and a corresponding API key is configured - yfinance is convenient
+        but well known to break/rate-limit intermittently.
+
         Args:
             symbol: Stock symbol (e.g., 'AAPL')
             period: Data period (e.g., '1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', 'max')
             interval: Data interval (e.g., '1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo', '3mo')
             use_cache: Whether to use cached data
-            
+
         Returns:
             Optional[pd.DataFrame]: DataFrame with stock data or None if fetch failed
         """
@@ -42,30 +53,99 @@ class DataFetcher:
                 if cached_data is not None:
                     logger.debug(f"Retrieved {symbol} data from cache")
                     return cached_data
-                    
-            # Fetch new data
-            stock = yf.Ticker(symbol)
-            df = stock.history(period=period, interval=interval)
-            
-            if df.empty:
+
+            df = self._fetch_with_fallback(symbol, period, interval)
+
+            if df is None or df.empty:
                 logger.warning(f"No data received for symbol {symbol}")
                 return None
-                
+
             # Validate data
             validate_stock_data(df)
-                
+
             # Add technical indicators
             df = self._add_technical_indicators(df)
-            
+
             # Cache the result
             if use_cache:
                 self.cache.set(symbol, period, interval, df)
-            
+
             return df
-            
+
         except Exception as e:
             logger.error(f"Error fetching data for {symbol}: {str(e)}")
             raise DataFetchError(f"Failed to fetch data for {symbol}: {str(e)}")
+
+    def _fetch_with_fallback(self, symbol: str, period: str, interval: str) -> Optional[pd.DataFrame]:
+        """Try yfinance first, then Alpha Vantage/Finnhub for daily data if it fails"""
+        try:
+            df = yf.Ticker(symbol).history(period=period, interval=interval)
+            if not df.empty:
+                return df
+            logger.warning(f"yfinance returned no data for {symbol}, trying fallback providers")
+        except Exception as e:
+            logger.warning(f"yfinance fetch failed for {symbol} ({e}), trying fallback providers")
+
+        # The free-tier fallback providers only make sense for daily bars;
+        # their intraday history/entitlements are far more limited than yfinance's.
+        if interval not in ('1d', '1D', 'daily'):
+            return None
+
+        for fetch_fn, name in (
+            (self._fetch_alpha_vantage, 'Alpha Vantage'),
+            (self._fetch_finnhub, 'Finnhub'),
+        ):
+            try:
+                df = fetch_fn(symbol, period)
+                if df is not None and not df.empty:
+                    logger.info(f"Fetched {symbol} from {name} fallback")
+                    return df
+            except Exception as e:
+                logger.warning(f"{name} fallback failed for {symbol}: {e}")
+
+        return None
+
+    def _fetch_alpha_vantage(self, symbol: str, period: str) -> Optional[pd.DataFrame]:
+        """Fallback fetch via Alpha Vantage's daily time series"""
+        if not Config.ALPHA_VANTAGE_API_KEY:
+            return None
+
+        from alpha_vantage.timeseries import TimeSeries
+
+        ts = TimeSeries(key=Config.ALPHA_VANTAGE_API_KEY, output_format='pandas')
+        outputsize = 'full' if _PERIOD_DAYS.get(period, 30) > 100 else 'compact'
+        data, _ = ts.get_daily(symbol, outputsize=outputsize)
+
+        data = data.rename(columns={
+            '1. open': 'Open', '2. high': 'High', '3. low': 'Low',
+            '4. close': 'Close', '5. volume': 'Volume'
+        })
+        data.index = pd.to_datetime(data.index)
+        data = data.sort_index()
+
+        cutoff = datetime.now() - timedelta(days=_PERIOD_DAYS.get(period, 30))
+        return data[data.index >= cutoff]
+
+    def _fetch_finnhub(self, symbol: str, period: str) -> Optional[pd.DataFrame]:
+        """Fallback fetch via Finnhub's daily candles"""
+        if not Config.FINNHUB_API_KEY:
+            return None
+
+        import finnhub
+
+        client = finnhub.Client(api_key=Config.FINNHUB_API_KEY)
+        end = datetime.now()
+        start = end - timedelta(days=_PERIOD_DAYS.get(period, 30))
+        candles = client.stock_candles(symbol, 'D', int(start.timestamp()), int(end.timestamp()))
+
+        if candles.get('s') != 'ok' or not candles.get('t'):
+            return None
+
+        df = pd.DataFrame({
+            'Open': candles['o'], 'High': candles['h'], 'Low': candles['l'],
+            'Close': candles['c'], 'Volume': candles['v']
+        }, index=[datetime.fromtimestamp(t) for t in candles['t']])
+        return df.sort_index()
             
     def _add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add technical indicators to DataFrame"""

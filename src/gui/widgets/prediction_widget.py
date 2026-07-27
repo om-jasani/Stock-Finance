@@ -1,6 +1,6 @@
 """Stock price prediction widget"""
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-                         QFrame, QLabel, QSpinBox, QProgressBar, QMessageBox)
+                         QFrame, QLabel, QSpinBox, QProgressBar, QMessageBox, QComboBox)
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtCore import pyqtSlot, QThread, pyqtSignal, QUrl
 import pandas as pd
@@ -10,6 +10,7 @@ import os
 import tempfile
 from ...utils.data_fetcher import DataFetcher
 from ...utils.model_trainer import StockPredictor
+from ...utils.gbm_predictor import GBMPredictor
 from ...utils.model_manager import ModelManager
 from ...utils.logger import logger
 from ...utils.config import Config
@@ -19,14 +20,15 @@ class TrainingWorker(QThread):
     progress = pyqtSignal(int)
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
-    
-    def __init__(self, symbol: str, training_years: int = 2):
+
+    def __init__(self, symbol: str, training_years: int = 2, model_type: str = 'lstm'):
         super().__init__()
         self.symbol = symbol
         self.training_years = training_years
+        self.model_type = model_type
         self.data_fetcher = DataFetcher()
-        self.model = StockPredictor()
-        
+        self.model = StockPredictor() if model_type == 'lstm' else GBMPredictor()
+
     def run(self):
         try:
             # Fetch training data
@@ -35,27 +37,28 @@ class TrainingWorker(QThread):
                 period=f"{self.training_years}y",
                 interval="1d"
             )
-            
+
             if df is None or df.empty:
                 raise ValueError(f"No data available for {self.symbol}")
-            
-            # Train model
+
+            # Train model (both predictor types share this call signature)
             training_results = self.model.train(df)
-            
+
             # Save model through model manager
             model_manager = ModelManager()
             model_id = model_manager.save_model(
                 symbol=self.symbol,
                 model=self.model,
-                metrics=training_results
+                metrics=training_results,
+                model_type=self.model_type
             )
-            
+
             # Emit results
             self.finished.emit({
                 'model_id': model_id,
                 'metrics': training_results
             })
-            
+
         except Exception as e:
             logger.error(f"Training error: {str(e)}")
             self.error.emit(str(e))
@@ -80,13 +83,21 @@ class PredictionWidget(QWidget):
         control_panel.setObjectName("control-panel")
         control_layout = QHBoxLayout(control_panel)
         
+        # Model type selector
+        self.model_type_selector = QComboBox()
+        self.model_type_selector.addItem("LSTM (deep learning)", userData='lstm')
+        self.model_type_selector.addItem("LightGBM (gradient boosted trees)", userData='gbm')
+        self.model_type_selector.currentIndexChanged.connect(lambda _: self.update_model_info())
+        control_layout.addWidget(QLabel("Model:"))
+        control_layout.addWidget(self.model_type_selector)
+
         # Days to predict spinner
         self.days_spinner = QSpinBox()
         self.days_spinner.setRange(1, 365)
         self.days_spinner.setValue(30)
         control_layout.addWidget(QLabel("Days to Predict:"))
         control_layout.addWidget(self.days_spinner)
-        
+
         # Training period selector
         self.period_selector = QSpinBox()
         self.period_selector.setRange(1, 10)
@@ -128,45 +139,53 @@ class PredictionWidget(QWidget):
         
         layout.addWidget(self.info_panel)
         
+    def current_model_type(self) -> str:
+        """The model type ('lstm' or 'gbm') selected in the dropdown"""
+        return self.model_type_selector.currentData()
+
     @pyqtSlot(str)
     def update_symbol(self, symbol: str):
         """Update current symbol"""
         self.current_symbol = symbol
         self.update_model_info()
-        
+
     def update_model_info(self):
         """Update model information display"""
         if not self.current_symbol:
             return
 
-        # Check for existing model
-        model_id = self.model_manager.get_latest_model_id(self.current_symbol)
+        # Check for existing model of the selected type
+        model_id = self.model_manager.get_latest_model_id(self.current_symbol, self.current_model_type())
         if model_id:
             metrics = self.model_manager.get_model_metrics(model_id)
             if metrics:
+                if 'mape' in metrics:
+                    detail = f"MAPE: {metrics['mape']:.2f}%"
+                else:
+                    detail = f"Test Loss: {metrics.get('test_loss', 0):.4f}"
                 self.accuracy_label.setText(
-                    f"Model Accuracy: {metrics.get('direction_accuracy', 0):.1f}%\n"
-                    f"MAPE: {metrics.get('mape', 0):.2f}%"
+                    f"Model Accuracy: {metrics.get('direction_accuracy', 0):.1f}%\n{detail}"
                 )
         else:
             self.accuracy_label.setText("No trained model available")
-        
+
     def train_model(self):
         """Train prediction model"""
         if not self.current_symbol:
             QMessageBox.warning(self, "Error", "No stock symbol selected")
             return
-            
+
         # Show progress bar
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate
         self.train_button.setEnabled(False)
         self.predict_button.setEnabled(False)
-        
+
         # Start training in thread
         self.training_thread = TrainingWorker(
             self.current_symbol,
-            self.period_selector.value()
+            self.period_selector.value(),
+            self.current_model_type()
         )
         self.training_thread.finished.connect(self.on_training_finished)
         self.training_thread.error.connect(self.on_training_error)
@@ -203,29 +222,32 @@ class PredictionWidget(QWidget):
             return
             
         try:
-            # Get model
-            model = self.model_manager.get_latest_model(self.current_symbol)
+            # Get model of the selected type
+            model_type = self.current_model_type()
+            model = self.model_manager.get_latest_model(self.current_symbol, model_type)
             if model is None:
-                QMessageBox.warning(self, "Error", "No trained model available")
+                QMessageBox.warning(self, "Error",
+                                   f"No trained {self.model_type_selector.currentText()} model available")
                 return
-            
+
             # Fetch recent data
             df = self.data_fetcher.get_stock_data(
                 self.current_symbol,
                 period="60d",
                 interval="1d"
             )
-            
+
             if df is None or df.empty:
                 QMessageBox.warning(self, "Error", "Failed to fetch stock data")
                 return
-            
-            # Make predictions
-            predictions_df = model.predict_future(
-                df,
-                days=self.days_spinner.value(),
-                confidence_interval=True
-            )
+
+            # Make predictions (only the LSTM path supports Monte Carlo confidence intervals)
+            if isinstance(model, StockPredictor):
+                predictions_df = model.predict_future(
+                    df, days=self.days_spinner.value(), confidence_interval=True
+                )
+            else:
+                predictions_df = model.predict_future(df, days=self.days_spinner.value())
             
             # Visualize predictions
             self.plot_predictions(df, predictions_df)
@@ -317,6 +339,6 @@ class PredictionWidget(QWidget):
         try:
             import shutil
             shutil.rmtree(self.temp_dir)
-        except:
-            pass
+        except OSError as e:
+            logger.warning(f"Failed to clean up temp dir {self.temp_dir}: {e}")
         super().closeEvent(event)

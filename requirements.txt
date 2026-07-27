@@ -1,6 +1,7 @@
 # Core Dependencies
 numpy
 pandas
+pyarrow  # parquet engine, required for the on-disk data cache
 python-dotenv
 
 # Machine Learning

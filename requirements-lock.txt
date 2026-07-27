@@ -50,6 +50,7 @@ plotly==6.9.0
 pluggy==1.6.0
 propcache==0.5.2
 protobuf==7.35.1
+pyarrow==25.0.0
 pycparser==3.0
 Pygments==2.20.0
 pyparsing==3.3.2
