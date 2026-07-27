@@ -138,13 +138,11 @@ class PredictionWidget(QWidget):
         """Update model information display"""
         if not self.current_symbol:
             return
-            
+
         # Check for existing model
-        model = self.model_manager.get_latest_model(self.current_symbol)
-        if model:
-            metrics = self.model_manager.get_model_metrics(
-                next(iter(self.model_manager.list_models(self.current_symbol)))['id']
-            )
+        model_id = self.model_manager.get_latest_model_id(self.current_symbol)
+        if model_id:
+            metrics = self.model_manager.get_model_metrics(model_id)
             if metrics:
                 self.accuracy_label.setText(
                     f"Model Accuracy: {metrics.get('direction_accuracy', 0):.1f}%\n"
@@ -181,9 +179,11 @@ class PredictionWidget(QWidget):
         self.predict_button.setEnabled(True)
         
         metrics = results['metrics']
+        test_loss = metrics.get('test_loss', 0)
+        final_loss = test_loss[0] if isinstance(test_loss, (list, tuple)) else test_loss
         self.accuracy_label.setText(
             f"Training completed successfully\n"
-            f"Final loss: {metrics.get('test_loss', [0])[0]:.4f}"
+            f"Final loss: {final_loss:.4f}"
         )
         
         # Make prediction with new model
@@ -270,7 +270,7 @@ class PredictionWidget(QWidget):
             ))
             
             # Confidence intervals
-            if 'Lower_Bound' in predictions_df.columns:
+            if 'Lower_Bound' in predictions_df.columns and 'Upper_Bound' in predictions_df.columns:
                 fig.add_trace(go.Scatter(
                     x=predictions_df.index,
                     y=predictions_df['Upper_Bound'],

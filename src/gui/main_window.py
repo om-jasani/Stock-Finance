@@ -7,26 +7,56 @@ import os
 import yfinance as yf
 from .widget_manager import WidgetManager
 from .styles.colors import ColorScheme, StyleConstants
+from .workers import FetchWorker
 from ..utils.logger import logger
+
+# Common tickers used to seed the search completer instantly; the search
+# thread also queries Yahoo Finance's lookup API for anything not in here.
+_COMMON_SYMBOLS = ["AAPL", "GOOGL", "MSFT", "AMZN", "META", "TSLA", "NVDA",
+                    "AMD", "INTC", "IBM", "NFLX", "DIS", "V", "MA", "JPM"]
+
 
 class StockSearchThread(QThread):
     """Background thread for stock symbol search"""
     resultReady = pyqtSignal(list)
-    
+
     def __init__(self, query):
         super().__init__()
         self.query = query
-        
+        self._cancelled = False
+
+    def cancel(self):
+        """Cooperative cancellation flag (QThread.terminate() is unsafe)"""
+        self._cancelled = True
+
     def run(self):
         try:
             matches = []
-            if len(self.query) >= 2:
-                common_symbols = ["AAPL", "GOOGL", "MSFT", "AMZN", "META", "TSLA", "NVDA", "AMD", "INTC", "IBM"]
-                matches = [s for s in common_symbols if self.query.upper() in s]
-            self.resultReady.emit(matches)
+            query_upper = self.query.upper().strip()
+            if len(query_upper) >= 2:
+                matches = [s for s in _COMMON_SYMBOLS if query_upper in s]
+
+                if self._cancelled:
+                    return
+
+                # Look up real matches via yfinance's search, so tickers
+                # outside the seed list are still found.
+                try:
+                    results = yf.Lookup(query_upper).get_stock(count=10)
+                    if results is not None and not results.empty:
+                        for sym in results.index.get_level_values(0).unique():
+                            sym = str(sym).upper()
+                            if sym not in matches:
+                                matches.append(sym)
+                except Exception as e:
+                    logger.debug(f"Symbol lookup unavailable for '{query_upper}': {e}")
+
+            if not self._cancelled:
+                self.resultReady.emit(matches)
         except Exception as e:
             logger.error(f"Search error: {str(e)}")
-            self.resultReady.emit([])
+            if not self._cancelled:
+                self.resultReady.emit([])
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -151,10 +181,12 @@ class MainWindow(QMainWindow):
         
     def search_stocks(self, text):
         """Search for stock symbols"""
-        if hasattr(self, 'search_thread'):
-            self.search_thread.terminate()
-            self.search_thread.wait()
-            
+        if hasattr(self, 'search_thread') and self.search_thread.isRunning():
+            # Cooperative cancellation: QThread.terminate() can corrupt state
+            # mid-call, so just let the stale thread finish and ignore its result.
+            self.search_thread.cancel()
+            self.search_thread.resultReady.disconnect(self._update_completer)
+
         self.search_thread = StockSearchThread(text)
         self.search_thread.resultReady.connect(self._update_completer)
         self.search_thread.start()
@@ -171,21 +203,25 @@ class MainWindow(QMainWindow):
         symbol = symbol.upper().strip()
         if not symbol:
             return
-            
-        try:
-            # Verify stock exists
-            stock = yf.Ticker(symbol)
-            info = stock.info
-            if info:
-                # Update widgets through widget manager
-                self.widget_manager.update_symbol(symbol)
-                
-                # Update window title
-                self.setWindowTitle(f"{info.get('longName', symbol)} - Stock Analysis & Prediction")
-                
-        except Exception as e:
-            logger.error(f"Error updating stock: {str(e)}")
-            
+
+        # Verifying the ticker via yfinance is a network call - keep it off
+        # the GUI thread so the window doesn't freeze while it resolves.
+        self._stock_check_worker = FetchWorker(lambda: yf.Ticker(symbol).info)
+        self._stock_check_worker.finished.connect(
+            lambda info: self._on_stock_verified(symbol, info))
+        self._stock_check_worker.error.connect(
+            lambda msg: logger.error(f"Error updating stock '{symbol}': {msg}"))
+        self._stock_check_worker.start()
+
+    def _on_stock_verified(self, symbol: str, info: dict):
+        """Apply the new symbol once yfinance has confirmed it exists"""
+        if not info:
+            logger.warning(f"No info returned for symbol '{symbol}'")
+            return
+
+        self.widget_manager.update_symbol(symbol)
+        self.setWindowTitle(f"{info.get('longName', symbol)} - Stock Analysis & Prediction")
+
     def closeEvent(self, event):
         """Handle application shutdown"""
         try:
@@ -193,6 +229,6 @@ class MainWindow(QMainWindow):
             portfolio_widget = self.widget_manager.get_widget('portfolio')
             if portfolio_widget:
                 portfolio_widget.save_portfolio()
-        except:
-            pass
+        except (OSError, IOError) as e:
+            logger.error(f"Failed to save portfolio on close: {e}")
         super().closeEvent(event)

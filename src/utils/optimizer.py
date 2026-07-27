@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Any, Type, Tuple
 import itertools
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from scipy.stats import spearmanr
 from .backtester import Backtester
 from .strategies import TradingStrategy
@@ -70,10 +70,16 @@ class StrategyOptimizer:
                     logger.error(f"Error testing parameters {params}: {str(e)}")
                     return params, float('-inf'), {}
             
-            # Run optimization in parallel
+            # Run optimization in parallel. A thread pool is used rather than
+            # a process pool because test_parameters closes over `self`
+            # (Backtester/DataFetcher/DataCache, which holds a non-picklable
+            # threading.Lock) - it wouldn't survive being sent to a worker
+            # process. The data-fetching portion of each backtest is I/O
+            # bound and still parallelizes well across threads, and repeated
+            # symbol fetches benefit from DataCache.
             results = []
-            with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                futures = [executor.submit(test_parameters, params) 
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(test_parameters, params)
                           for params in param_combinations]
                 
                 for future in futures:
@@ -110,12 +116,12 @@ class StrategyOptimizer:
         try:
             importance = {}
             scores = np.array([score for _, score, _ in results])
-            
+
             for param_name in self.param_grid.keys():
                 param_values = np.array([res[0][param_name] for res in results])
                 if isinstance(param_values[0], (int, float)):
                     corr, _ = spearmanr(param_values, scores)
-                    importance[param_name] = abs(corr)
+                    importance[param_name] = abs(corr) if not np.isnan(corr) else 0.0
                 else:
                     # For categorical parameters, calculate variance in performance
                     unique_values = set(param_values)
@@ -124,25 +130,30 @@ class StrategyOptimizer:
                         value_scores[val].append(score)
                     variances = [np.var(scores) for scores in value_scores.values()]
                     importance[param_name] = np.mean(variances)
-            
+
             # Normalize importance scores
-            max_importance = max(importance.values())
-            importance = {k: v/max_importance for k, v in importance.items()}
-            
+            max_importance = max(importance.values()) if importance else 0
+            importance = {k: (v / max_importance if max_importance else 0.0)
+                          for k, v in importance.items()}
+
             return importance
-            
+
+        except Exception as e:
+            logger.error(f"Error calculating parameter importance: {str(e)}")
+            return {}
+
     def _analyze_parameter_distributions(self, results: List[Tuple[Dict[str, Any], float, Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
         """Analyze parameter value distributions in top-performing results"""
         try:
             # Sort results by score
             sorted_results = sorted(results, key=lambda x: x[1], reverse=True)
-            top_n = int(len(results) * 0.1)  # Top 10%
+            top_n = max(1, int(len(results) * 0.1))  # Top 10% (at least 1)
             top_results = sorted_results[:top_n]
-            
+
             distributions = {}
             for param_name in self.param_grid.keys():
                 param_values = [res[0][param_name] for res in top_results]
-                
+
                 if isinstance(param_values[0], (int, float)):
                     distributions[param_name] = {
                         'mean': np.mean(param_values),
@@ -158,9 +169,13 @@ class StrategyOptimizer:
                         'mode': value_counts.index[0],
                         'frequencies': value_counts.to_dict()
                     }
-            
+
             return distributions
-            
+
+        except Exception as e:
+            logger.error(f"Error analyzing parameter distributions: {str(e)}")
+            return {}
+
     def _get_top_results(self, results: List[Tuple[Dict[str, Any], float, Dict[str, Any]]], n: int = 5) -> List[Dict[str, Any]]:
         """Get top N performing parameter combinations"""
         sorted_results = sorted(results, key=lambda x: x[1], reverse=True)
@@ -202,9 +217,11 @@ class StrategyOptimizer:
             scores = np.array([score for _, score, _ in results])
             
             # Calculate various robustness metrics
+            mean_score = np.mean(scores)
+            median_score = np.median(scores)
             consistency = len(scores[scores > 0]) / len(scores)  # Proportion of positive results
-            stability = 1 - (np.std(scores) / np.mean(scores))  # Lower variation is better
-            worst_case = np.percentile(scores, 5) / np.median(scores)  # Tail risk
+            stability = 1 - (np.std(scores) / mean_score) if mean_score else 0.0  # Lower variation is better
+            worst_case = np.percentile(scores, 5) / median_score if median_score else 0.0  # Tail risk
             
             # Combine metrics into final score
             robustness_score = (consistency * 0.4 + 
@@ -311,22 +328,35 @@ class WalkForwardOptimizer(StrategyOptimizer):
     def _analyze_walk_forward_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Analyze walk-forward optimization results"""
         try:
-            # Calculate parameter stability
+            # Calculate parameter stability (numeric parameters only)
             param_stability = {}
             for param in self.param_grid.keys():
                 values = [res['parameters'][param] for res in results]
-                param_stability[param] = np.std(values) / np.mean(values)
-            
+                if values and isinstance(values[0], (int, float)):
+                    mean_val = np.mean(values)
+                    param_stability[param] = np.std(values) / mean_val if mean_val else 0.0
+
             # Calculate performance consistency
-            train_scores = [res['train_score'] for res in results]
-            test_scores = [res['test_metrics'].get('sharpe_ratio', 0) for res in results]
-            
+            train_scores = np.array([res['train_score'] for res in results])
+            test_scores = np.array([res['test_metrics'].get('sharpe_ratio', 0) for res in results])
+
+            if len(train_scores) > 1 and np.std(train_scores) and np.std(test_scores):
+                train_test_correlation = np.corrcoef(train_scores, test_scores)[0, 1]
+            else:
+                train_test_correlation = 0.0
+
+            nonzero_train = train_scores != 0
+            optimization_decay = (
+                np.mean(test_scores[nonzero_train] / train_scores[nonzero_train])
+                if nonzero_train.any() else 0.0
+            )
+
             return {
                 'parameter_stability': param_stability,
                 'avg_train_score': np.mean(train_scores),
                 'avg_test_score': np.mean(test_scores),
-                'train_test_correlation': np.corrcoef(train_scores, test_scores)[0, 1],
-                'optimization_decay': np.mean(np.array(test_scores) / np.array(train_scores))
+                'train_test_correlation': train_test_correlation,
+                'optimization_decay': optimization_decay
             }
             
         except Exception as e:

@@ -1,9 +1,7 @@
 """Stock data fetching utility"""
 import yfinance as yf
 import pandas as pd
-from typing import Optional, Dict, Any, List, Tuple
-from datetime import datetime, timedelta
-import logging
+from typing import Optional, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 from .cache import DataCache
@@ -84,12 +82,13 @@ class DataFetcher:
             df['BB_upper'] = df['BB_middle'] + 2 * df['Close'].rolling(window=20).std()
             df['BB_lower'] = df['BB_middle'] - 2 * df['Close'].rolling(window=20).std()
             
-            # RSI
+            # RSI (guard divide-by-zero when there are no losses in the window)
             delta = df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            df['RSI'] = 100 - (100 / (1 + rs))
+            rs = gain / loss.replace(0, np.nan)
+            flat = (gain == 0) & (loss == 0)
+            df['RSI'] = (100 - (100 / (1 + rs))).fillna(100).where(~flat, 50)
             
             # MACD
             exp1 = df['Close'].ewm(span=12, adjust=False).mean()
@@ -286,16 +285,18 @@ class DataFetcher:
             # Calculate correlations
             correlations = []
             main_returns = main_data['Close'].pct_change()
-            
+            main_variance = main_returns.var()
+
             for comp_symbol, comp_data in comparison_data.items():
                 if comp_data is not None:
                     comp_returns = comp_data['Close'].pct_change()
                     correlation = main_returns.corr(comp_returns)
-                    
+                    beta = comp_returns.cov(main_returns) / main_variance if main_variance else np.nan
+
                     correlations.append({
                         'Symbol': comp_symbol,
                         'Correlation': correlation,
-                        'Beta': comp_returns.cov(main_returns) / main_returns.var()
+                        'Beta': beta
                     })
                     
             if not correlations:

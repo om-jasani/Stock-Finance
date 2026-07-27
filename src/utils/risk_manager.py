@@ -38,24 +38,27 @@ class RiskManager:
             # Calculate returns and weights
             returns_data = {}
             weights = []
+            valid_symbols = []
             total_value = 0
-            
+
             for symbol, position in positions.items():
                 if symbol in historical_data:
                     # Calculate position value
                     current_price = historical_data[symbol]['Close'].iloc[-1]
                     position_value = position['shares'] * current_price
                     total_value += position_value
-                    
+
                     # Store returns data
                     returns_data[symbol] = historical_data[symbol]['Close'].pct_change()
                     weights.append(position_value)
-            
+                    valid_symbols.append(symbol)
+
             if total_value == 0:
                 raise ValidationError("Portfolio has no value")
-                
+
             # Normalize weights
             weights = np.array(weights) / total_value
+            symbols = valid_symbols
             
             # Create returns matrix
             returns_matrix = pd.DataFrame(returns_data)
@@ -65,7 +68,7 @@ class RiskManager:
             portfolio_volatility = self._calculate_portfolio_volatility(weights, returns_matrix)
             
             # Calculate additional metrics
-            sharpe_ratio = (portfolio_return - risk_free_rate) / portfolio_volatility
+            sharpe_ratio = (portfolio_return - risk_free_rate) / portfolio_volatility if portfolio_volatility else 0.0
             
             # Calculate Value at Risk (VaR)
             var_95 = self._calculate_var(weights, returns_matrix, confidence_level=0.95)
@@ -115,16 +118,16 @@ class RiskManager:
         try:
             # Fetch historical data
             historical_data = self.data_fetcher.get_multiple_stocks(symbols, period='1y')
-            
+
             if not historical_data:
                 raise ValidationError("No historical data available")
-                
-            # Create returns matrix
-            returns_data = {}
-            for symbol in symbols:
-                if symbol in historical_data:
-                    returns_data[symbol] = historical_data[symbol]['Close'].pct_change()
-            
+
+            # Create returns matrix, restricting to symbols we actually got data for
+            symbols = [s for s in symbols if s in historical_data]
+            if not symbols:
+                raise ValidationError("No historical data available for the requested symbols")
+
+            returns_data = {symbol: historical_data[symbol]['Close'].pct_change() for symbol in symbols}
             returns_matrix = pd.DataFrame(returns_data)
             
             # Define optimization constraints
@@ -188,7 +191,7 @@ class RiskManager:
         """Calculate Sharpe ratio"""
         portfolio_ret = self._calculate_portfolio_return(weights, returns)
         portfolio_vol = self._calculate_portfolio_volatility(weights, returns)
-        return (portfolio_ret - risk_free_rate) / portfolio_vol
+        return (portfolio_ret - risk_free_rate) / portfolio_vol if portfolio_vol else 0.0
         
     def _calculate_var(self, weights: np.ndarray, returns: pd.DataFrame, confidence_level: float) -> float:
         """Calculate Value at Risk"""

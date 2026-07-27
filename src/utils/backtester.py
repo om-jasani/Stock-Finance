@@ -24,7 +24,13 @@ class BacktestResult:
 
 class Backtester:
     """Class for backtesting trading strategies"""
-    
+
+    # Rows of trailing history handed to the strategy each step. Bounds the
+    # per-step cost so a 'max'-period backtest doesn't degrade to O(n^2);
+    # comfortably covers the built-in strategies' default/typical lookbacks
+    # (<=50 bars) with wide margin for custom parameters.
+    STRATEGY_LOOKBACK_WINDOW = 300
+
     def __init__(self, initial_capital: float = 100000):
         self.data_fetcher = DataFetcher()
         self.market_analyzer = MarketAnalyzer()
@@ -57,12 +63,14 @@ class Backtester:
             position = 0
             trades = []
             current_trade = None
-            
+            equity_curve = []
+
             # Run strategy
+            window = self.STRATEGY_LOOKBACK_WINDOW
             for i in range(len(df)):
-                current_data = df.iloc[:i+1]
+                current_data = df.iloc[max(0, i + 1 - window):i + 1]
                 signal = strategy(current_data)
-                
+
                 price = current_data['Close'].iloc[-1]
                 date = current_data.index[-1]
                 
@@ -132,7 +140,10 @@ class Backtester:
                         })
                         position = 0
                         current_trade = None
-                        
+
+                # Mark-to-market daily equity (cash + value of any open position)
+                equity_curve.append((date, capital + position * price))
+
             # Close any remaining position
             if position > 0:
                 price = df['Close'].iloc[-1]
@@ -148,17 +159,26 @@ class Backtester:
                     'exit_reason': 'END_OF_PERIOD'
                 })
                 
+            # Update final equity mark after closing any remaining position
+            if equity_curve:
+                equity_curve[-1] = (equity_curve[-1][0], capital)
+            equity_series = pd.Series(
+                data=[v for _, v in equity_curve],
+                index=[d for d, _ in equity_curve]
+            )
+
             # Calculate metrics
             trades_df = pd.DataFrame(trades)
-            metrics = self._calculate_metrics(trades_df, df, capital)
-            
+            metrics = self._calculate_metrics(trades_df, df, capital, equity_series)
+
             return BacktestResult(trades_df, metrics)
             
         except Exception as e:
             logger.error(f"Error running backtest: {str(e)}")
             raise
             
-    def _calculate_metrics(self, trades_df: pd.DataFrame, price_data: pd.DataFrame, final_capital: float) -> Dict[str, Any]:
+    def _calculate_metrics(self, trades_df: pd.DataFrame, price_data: pd.DataFrame,
+                          final_capital: float, equity_series: Optional[pd.Series] = None) -> Dict[str, Any]:
         """Calculate backtest metrics"""
         try:
             if trades_df.empty:
@@ -173,29 +193,33 @@ class Backtester:
                     'average_return': 0,
                     'max_consecutive_losses': 0
                 }
-                
+
             # Basic metrics
             total_return = ((final_capital - self.initial_capital) / self.initial_capital) * 100
             trading_days = (price_data.index[-1] - price_data.index[0]).days
-            annual_return = (total_return / trading_days) * 365
-            
-            # Calculate returns series
-            returns_series = pd.Series(index=price_data.index, data=0.0)
-            for _, trade in trades_df.iterrows():
-                returns_series[trade['exit_date']] = trade['return']
-                
-            # Sharpe ratio
-            daily_returns = returns_series[returns_series != 0]
-            if len(daily_returns) > 0:
-                sharpe_ratio = np.sqrt(252) * (daily_returns.mean() / daily_returns.std())
+
+            # Compound annual growth rate, not a naive linear scale-up
+            if trading_days > 0 and final_capital > 0:
+                annual_return = (((final_capital / self.initial_capital) ** (365 / trading_days)) - 1) * 100
+            else:
+                annual_return = 0
+
+            # Sharpe ratio and drawdown from the actual daily mark-to-market
+            # equity curve, not from sparse per-trade returns treated as if
+            # they were daily observations.
+            if equity_series is not None and len(equity_series) > 1:
+                daily_returns = equity_series.pct_change().dropna()
+                if len(daily_returns) > 0 and daily_returns.std() != 0:
+                    sharpe_ratio = np.sqrt(252) * (daily_returns.mean() / daily_returns.std())
+                else:
+                    sharpe_ratio = 0
+
+                rolling_max = equity_series.expanding().max()
+                drawdowns = (equity_series - rolling_max) / rolling_max * 100
+                max_drawdown = drawdowns.min()
             else:
                 sharpe_ratio = 0
-                
-            # Drawdown analysis
-            cumulative_returns = (1 + returns_series/100).cumprod()
-            rolling_max = cumulative_returns.expanding().max()
-            drawdowns = (cumulative_returns - rolling_max) / rolling_max * 100
-            max_drawdown = drawdowns.min()
+                max_drawdown = 0
             
             # Trading statistics
             number_of_trades = len(trades_df)

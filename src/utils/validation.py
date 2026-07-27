@@ -1,9 +1,15 @@
 """Validation utilities for the application"""
+import re
+import datetime
 import pandas as pd
 import numpy as np
 from typing import Union, List, Dict, Any
 from .exceptions import ValidationError
 from .logger import logger
+
+# Ticker symbols: letters, and optionally digits/dot/dash for share classes
+# and exchange suffixes (e.g. BRK.B, BF-B, RELIANCE.NS)
+_SYMBOL_PATTERN = re.compile(r'^[A-Za-z0-9]+([.\-][A-Za-z0-9]+)*$')
 
 def validate_stock_data(df: pd.DataFrame) -> bool:
     """
@@ -48,7 +54,9 @@ def validate_stock_data(df: pd.DataFrame) -> bool:
             raise ValidationError("DataFrame is not in chronological order")
             
         return True
-        
+
+    except ValidationError:
+        raise
     except Exception as e:
         logger.error(f"Data validation error: {str(e)}")
         raise ValidationError(f"Data validation failed: {str(e)}")
@@ -98,7 +106,9 @@ def validate_model_input(X: Union[np.ndarray, pd.DataFrame],
             raise ValidationError("Input contains infinite values")
             
         return True
-        
+
+    except ValidationError:
+        raise
     except Exception as e:
         logger.error(f"Input validation error: {str(e)}")
         raise ValidationError(f"Input validation failed: {str(e)}")
@@ -125,8 +135,8 @@ def validate_portfolio_data(data: Dict[str, Any]) -> bool:
             
         # Validate each position
         for symbol, position in data.items():
-            # Check symbol format
-            if not isinstance(symbol, str) or not symbol.isalpha():
+            # Check symbol format (allows share-class/exchange suffixes like BRK.B, BF-B)
+            if not isinstance(symbol, str) or not _SYMBOL_PATTERN.match(symbol):
                 raise ValidationError(f"Invalid symbol format: {symbol}")
                 
             # Check required fields
@@ -149,7 +159,9 @@ def validate_portfolio_data(data: Dict[str, Any]) -> bool:
                 )
                 
         return True
-        
+
+    except ValidationError:
+        raise
     except Exception as e:
         logger.error(f"Portfolio validation error: {str(e)}")
         raise ValidationError(f"Portfolio validation failed: {str(e)}")
@@ -174,10 +186,11 @@ def validate_date_range(start_date: pd.Timestamp,
         ValidationError: If validation fails
     """
     try:
-        # Check if dates are valid
-        if not isinstance(start_date, pd.Timestamp) or not isinstance(end_date, pd.Timestamp):
+        # Check if dates are valid (accept any datetime-like, not just pd.Timestamp)
+        if not isinstance(start_date, datetime.date) or not isinstance(end_date, datetime.date):
             raise ValidationError("Invalid date format")
-            
+
+
         # Check if end date is after start date
         if end_date <= start_date:
             raise ValidationError("End date must be after start date")
@@ -193,7 +206,9 @@ def validate_date_range(start_date: pd.Timestamp,
             raise ValidationError(f"Date range too long: {days} days (maximum {max_days})")
             
         return True
-        
+
+    except ValidationError:
+        raise
     except Exception as e:
         logger.error(f"Date range validation error: {str(e)}")
         raise ValidationError(f"Date range validation failed: {str(e)}")

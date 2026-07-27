@@ -19,12 +19,12 @@ from .data_pipeline import DataPipeline
 class StockPredictor:
     """LSTM-based stock price prediction model"""
     
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self, model_path: Optional[str] = None, scaler_path: Optional[str] = None):
         """Initialize the predictor"""
         self.model = None
         self.data_pipeline = DataPipeline()
         self.model_path = model_path or os.path.join(Config.MODELS_DIR, 'stock_predictor.keras')
-        self.scaler_path = os.path.join(Config.MODELS_DIR, 'scalers.pkl')
+        self.scaler_path = scaler_path or os.path.join(Config.MODELS_DIR, 'scalers.pkl')
         self.history = None
         
     def build_model(self, input_shape: Tuple[int, int]) -> None:

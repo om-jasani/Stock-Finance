@@ -3,24 +3,32 @@ import pandas as pd
 from typing import Optional, Dict, Any
 import json
 import os
+import threading
 from datetime import datetime, timedelta
 from .logger import logger
 from .config import Config
 
 class DataCache:
-    """Simple data caching system"""
-    
+    """Simple data caching system.
+
+    Instances are shared across worker threads (e.g. DataFetcher.get_multiple_stocks
+    runs a ThreadPoolExecutor over the same DataCache), so all metadata
+    read/modify/save sequences are guarded by a lock to avoid races on
+    self.metadata and metadata.json.
+    """
+
     def __init__(self, cache_dir: Optional[str] = None):
         """
         Initialize cache
-        
+
         Args:
             cache_dir: Directory to store cache files
         """
         self.cache_dir = cache_dir or os.path.join(Config.DATA_DIR, 'cache')
         self.cache_duration = timedelta(minutes=Config.DATA_CACHE_MINUTES)
         os.makedirs(self.cache_dir, exist_ok=True)
-        
+        self._lock = threading.RLock()
+
         # Load cache metadata
         self.metadata_file = os.path.join(self.cache_dir, 'metadata.json')
         self.metadata = self._load_metadata()
@@ -67,16 +75,18 @@ class DataCache:
         try:
             key = self._get_cache_key(symbol, period, interval)
             cache_file = self._get_cache_file(key)
-            
-            # Check if cache exists and is valid
-            if (key in self.metadata and 
-                os.path.exists(cache_file) and
-                datetime.now() - datetime.fromisoformat(self.metadata[key]['timestamp']) < self.cache_duration):
-                
+
+            with self._lock:
+                # Check if cache exists and is valid
+                valid = (key in self.metadata and
+                         os.path.exists(cache_file) and
+                         datetime.now() - datetime.fromisoformat(self.metadata[key]['timestamp']) < self.cache_duration)
+
+            if valid:
                 return pd.read_parquet(cache_file)
-                
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Error reading from cache: {str(e)}")
             return None
@@ -94,23 +104,24 @@ class DataCache:
         try:
             key = self._get_cache_key(symbol, period, interval)
             cache_file = self._get_cache_file(key)
-            
-            # Save data
+
+            # Save data (each key writes to its own file, safe without the lock)
             data.to_parquet(cache_file)
-            
-            # Update metadata
-            self.metadata[key] = {
-                'timestamp': datetime.now().isoformat(),
-                'rows': len(data),
-                'period': period,
-                'interval': interval,
-                'symbol': symbol,
-                'columns': list(data.columns)
-            }
-            
-            # Save metadata
-            self._save_metadata()
-            
+
+            with self._lock:
+                # Update metadata
+                self.metadata[key] = {
+                    'timestamp': datetime.now().isoformat(),
+                    'rows': len(data),
+                    'period': period,
+                    'interval': interval,
+                    'symbol': symbol,
+                    'columns': list(data.columns)
+                }
+
+                # Save metadata
+                self._save_metadata()
+
         except Exception as e:
             logger.error(f"Error writing to cache: {str(e)}")
             
@@ -122,54 +133,56 @@ class DataCache:
             symbol: Optional symbol to clear specific cache
         """
         try:
-            if symbol:
-                # Clear specific symbol
-                keys_to_delete = [
-                    key for key in self.metadata 
-                    if key.startswith(symbol + '_')
-                ]
-                
-                for key in keys_to_delete:
-                    cache_file = self._get_cache_file(key)
-                    if os.path.exists(cache_file):
-                        os.remove(cache_file)
-                    del self.metadata[key]
-            else:
-                # Clear all cache
-                for key in self.metadata:
-                    cache_file = self._get_cache_file(key)
-                    if os.path.exists(cache_file):
-                        os.remove(cache_file)
-                self.metadata = {}
-                
-            # Save metadata
-            self._save_metadata()
-            
+            with self._lock:
+                if symbol:
+                    # Clear specific symbol
+                    keys_to_delete = [
+                        key for key in self.metadata
+                        if key.startswith(symbol + '_')
+                    ]
+
+                    for key in keys_to_delete:
+                        cache_file = self._get_cache_file(key)
+                        if os.path.exists(cache_file):
+                            os.remove(cache_file)
+                        del self.metadata[key]
+                else:
+                    # Clear all cache
+                    for key in self.metadata:
+                        cache_file = self._get_cache_file(key)
+                        if os.path.exists(cache_file):
+                            os.remove(cache_file)
+                    self.metadata = {}
+
+                # Save metadata
+                self._save_metadata()
+
         except Exception as e:
             logger.error(f"Error clearing cache: {str(e)}")
             
     def cleanup(self):
         """Remove expired cache entries"""
         try:
-            current_time = datetime.now()
-            keys_to_delete = []
-            
-            # Find expired entries
-            for key, info in self.metadata.items():
-                cache_time = datetime.fromisoformat(info['timestamp'])
-                if current_time - cache_time > self.cache_duration:
-                    keys_to_delete.append(key)
-                    
-            # Remove expired entries
-            for key in keys_to_delete:
-                cache_file = self._get_cache_file(key)
-                if os.path.exists(cache_file):
-                    os.remove(cache_file)
-                del self.metadata[key]
-                
-            # Save metadata
-            self._save_metadata()
-            
+            with self._lock:
+                current_time = datetime.now()
+                keys_to_delete = []
+
+                # Find expired entries
+                for key, info in self.metadata.items():
+                    cache_time = datetime.fromisoformat(info['timestamp'])
+                    if current_time - cache_time > self.cache_duration:
+                        keys_to_delete.append(key)
+
+                # Remove expired entries
+                for key in keys_to_delete:
+                    cache_file = self._get_cache_file(key)
+                    if os.path.exists(cache_file):
+                        os.remove(cache_file)
+                    del self.metadata[key]
+
+                # Save metadata
+                self._save_metadata()
+
         except Exception as e:
             logger.error(f"Error cleaning up cache: {str(e)}")
             
@@ -181,20 +194,21 @@ class DataCache:
             Dict[str, Any]: Cache statistics
         """
         try:
-            total_size = 0
-            for key in self.metadata:
-                cache_file = self._get_cache_file(key)
-                if os.path.exists(cache_file):
-                    total_size += os.path.getsize(cache_file)
-                    
-            return {
-                'entries': len(self.metadata),
-                'total_size_mb': total_size / (1024 * 1024),
-                'symbols': len(set(info['symbol'] for info in self.metadata.values())),
-                'oldest_entry': min(info['timestamp'] for info in self.metadata.values()) if self.metadata else None,
-                'newest_entry': max(info['timestamp'] for info in self.metadata.values()) if self.metadata else None
-            }
-            
+            with self._lock:
+                total_size = 0
+                for key in self.metadata:
+                    cache_file = self._get_cache_file(key)
+                    if os.path.exists(cache_file):
+                        total_size += os.path.getsize(cache_file)
+
+                return {
+                    'entries': len(self.metadata),
+                    'total_size_mb': total_size / (1024 * 1024),
+                    'symbols': len(set(info['symbol'] for info in self.metadata.values())),
+                    'oldest_entry': min(info['timestamp'] for info in self.metadata.values()) if self.metadata else None,
+                    'newest_entry': max(info['timestamp'] for info in self.metadata.values()) if self.metadata else None
+                }
+
         except Exception as e:
             logger.error(f"Error getting cache stats: {str(e)}")
             return {}

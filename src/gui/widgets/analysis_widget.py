@@ -7,6 +7,9 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 from ...utils.data_fetcher import DataFetcher
+from ...utils.market_analysis import MarketAnalyzer
+from ...utils.logger import logger
+from ..workers import FetchWorker
 import tempfile
 import os
 
@@ -14,7 +17,9 @@ class AnalysisWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.data_fetcher = DataFetcher()
+        self.market_analyzer = MarketAnalyzer()
         self.current_symbol = None
+        self.fetch_worker = None
         self.temp_dir = tempfile.mkdtemp()
         self.init_ui()
         
@@ -80,17 +85,25 @@ class AnalysisWidget(QWidget):
         """Update technical analysis"""
         if not self.current_symbol:
             return
-            
-        # Fetch data
-        df = self.data_fetcher.get_stock_data(
+
+        if self.fetch_worker is not None and self.fetch_worker.isRunning():
+            return
+
+        self.fetch_worker = FetchWorker(
+            self.data_fetcher.get_stock_data,
             self.current_symbol,
             period=self.period_selector.currentText(),
             interval='1d'
         )
-        
+        self.fetch_worker.finished.connect(self._on_data_fetched)
+        self.fetch_worker.error.connect(lambda msg: logger.error(f"Analysis fetch error: {msg}"))
+        self.fetch_worker.start()
+
+    def _on_data_fetched(self, df: pd.DataFrame):
+        """Render the analysis chart once data has arrived off the GUI thread"""
         if df is None or df.empty:
             return
-            
+
         # Create subplots
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
                           vertical_spacing=0.05,
@@ -124,18 +137,16 @@ class AnalysisWidget(QWidget):
             
         # Add Bollinger Bands
         if self.bb_button.isChecked():
-            upper, middle, lower = self.calculate_bollinger_bands(df['Close'])
-            
             fig.add_trace(go.Scatter(
                 x=df.index,
-                y=upper,
+                y=df['BB_upper'],
                 name='Upper BB',
                 line=dict(color='gray', dash='dash')
             ), row=1, col=1)
-            
+
             fig.add_trace(go.Scatter(
                 x=df.index,
-                y=lower,
+                y=df['BB_lower'],
                 name='Lower BB',
                 line=dict(color='gray', dash='dash'),
                 fill='tonexty'
@@ -143,9 +154,8 @@ class AnalysisWidget(QWidget):
             
         # Add Volume
         if self.volume_button.isChecked():
-            colors = ['red' if row['Open'] > row['Close'] else 'green'
-                     for index, row in df.iterrows()]
-            
+            colors = np.where(df['Open'] > df['Close'], 'red', 'green')
+
             fig.add_trace(go.Bar(
                 x=df.index,
                 y=df['Volume'],
@@ -168,27 +178,25 @@ class AnalysisWidget(QWidget):
             
         # Add MACD
         if self.macd_button.isChecked():
-            macd, signal, histogram = self.calculate_macd(df['Close'])
-            
             fig.add_trace(go.Scatter(
                 x=df.index,
-                y=macd,
+                y=df['MACD'],
                 name='MACD',
                 line=dict(color='blue')
             ), row=3, col=1)
-            
+
             fig.add_trace(go.Scatter(
                 x=df.index,
-                y=signal,
+                y=df['Signal_Line'],
                 name='Signal',
                 line=dict(color='orange')
             ), row=3, col=1)
-            
+
             fig.add_trace(go.Bar(
                 x=df.index,
-                y=histogram,
+                y=df['MACD_Histogram'],
                 name='Histogram',
-                marker_color=['red' if x < 0 else 'green' for x in histogram]
+                marker_color=['red' if x < 0 else 'green' for x in df['MACD_Histogram']]
             ), row=3, col=1)
             
         # Update layout
@@ -220,16 +228,20 @@ class AnalysisWidget(QWidget):
         
     def update_analysis_labels(self, df: pd.DataFrame):
         """Update technical analysis labels"""
+        if len(df) < 2:
+            return
+
         # Get latest values
         current_price = df['Close'].iloc[-1]
         sma_20 = df['SMA_20'].iloc[-1]
         sma_50 = df['SMA_50'].iloc[-1]
         rsi = df['RSI'].iloc[-1]
-        macd, signal, _ = self.calculate_macd(df['Close'])
-        
+        macd, signal = df['MACD'], df['Signal_Line']
+
         # Calculate support and resistance
-        support_levels, resistance_levels = self.calculate_support_resistance(df)
-        
+        levels = self.market_analyzer.find_support_resistance(df)
+        support_levels, resistance_levels = levels['support'], levels['resistance']
+
         # Generate signals
         signals = []
         
@@ -273,6 +285,6 @@ class AnalysisWidget(QWidget):
         try:
             import shutil
             shutil.rmtree(self.temp_dir)
-        except:
-            pass
+        except OSError as e:
+            logger.warning(f"Failed to clean up temp dir {self.temp_dir}: {e}")
         super().closeEvent(event)

@@ -5,8 +5,10 @@ from PyQt6.QtCore import pyqtSlot, QUrl
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
+import numpy as np
 from ...utils.data_fetcher import DataFetcher
-import plotly.io as pio
+from ...utils.logger import logger
+from ..workers import FetchWorker
 import tempfile
 import os
 
@@ -15,6 +17,7 @@ class StockChartWidget(QWidget):
         super().__init__()
         self.data_fetcher = DataFetcher()
         self.current_symbol = None
+        self.fetch_worker = None
         self.temp_dir = tempfile.mkdtemp()
         self.init_ui()
         
@@ -94,17 +97,25 @@ class StockChartWidget(QWidget):
         """Update the chart with current settings"""
         if not self.current_symbol:
             return
-            
-        # Fetch data
-        df = self.data_fetcher.get_stock_data(
+
+        if self.fetch_worker is not None and self.fetch_worker.isRunning():
+            return
+
+        self.fetch_worker = FetchWorker(
+            self.data_fetcher.get_stock_data,
             self.current_symbol,
             period=self.period_selector.currentText(),
             interval=self.interval_selector.currentText()
         )
-        
+        self.fetch_worker.finished.connect(self._on_data_fetched)
+        self.fetch_worker.error.connect(lambda msg: logger.error(f"Chart fetch error: {msg}"))
+        self.fetch_worker.start()
+
+    def _on_data_fetched(self, df: pd.DataFrame):
+        """Render the chart once data has arrived off the GUI thread"""
         if df is None or df.empty:
             return
-            
+
         # Create figure with secondary y-axis
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
                           vertical_spacing=0.05,
@@ -138,9 +149,8 @@ class StockChartWidget(QWidget):
         
         # Add volume if enabled
         if self.volume_button.isChecked():
-            colors = ['red' if row['Open'] > row['Close'] else 'green'
-                     for index, row in df.iterrows()]
-            
+            colors = np.where(df['Open'] > df['Close'], 'red', 'green')
+
             fig.add_trace(go.Bar(
                 x=df.index,
                 y=df['Volume'],
@@ -186,19 +196,22 @@ class StockChartWidget(QWidget):
         
         # Update info panel
         last_price = df['Close'].iloc[-1]
-        prev_price = df['Close'].iloc[-2]
-        price_change = last_price - prev_price
-        price_change_pct = (price_change / prev_price) * 100
-        
         self.price_label.setText(f"Price: ₹{last_price:.2f}")
-        self.change_label.setText(f"Change: {price_change:+.2f} ({price_change_pct:+.2f}%)")
         self.volume_label.setText(f"Volume: {df['Volume'].iloc[-1]:,.0f}")
+
+        if len(df) >= 2:
+            prev_price = df['Close'].iloc[-2]
+            price_change = last_price - prev_price
+            price_change_pct = (price_change / prev_price) * 100 if prev_price else 0
+            self.change_label.setText(f"Change: {price_change:+.2f} ({price_change_pct:+.2f}%)")
+        else:
+            self.change_label.setText("Change: N/A")
         
     def closeEvent(self, event):
         """Clean up temporary files on close"""
         try:
             import shutil
             shutil.rmtree(self.temp_dir)
-        except:
-            pass
+        except OSError as e:
+            logger.warning(f"Failed to clean up temp dir {self.temp_dir}: {e}")
         super().closeEvent(event)

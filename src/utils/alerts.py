@@ -170,9 +170,9 @@ class AlertManager:
                         
             elif alert_type == 'VOLUME':
                 if 'volume_multiple' in conditions:
-                    current_volume = signals['signals'][0].get('Volume', 0)
-                    avg_volume = signals['signals'][0].get('Volume_SMA', 1)
-                    if current_volume / avg_volume > conditions['volume_multiple']:
+                    current_volume = signals.get('volume', 0)
+                    avg_volume = signals.get('volume_sma', 0)
+                    if avg_volume and current_volume / avg_volume > conditions['volume_multiple']:
                         return True
                         
             return False

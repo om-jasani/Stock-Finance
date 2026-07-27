@@ -7,6 +7,9 @@ import pandas as pd
 import json
 import os
 from ...utils.data_fetcher import DataFetcher
+from ...utils.config import Config
+from ...utils.logger import logger
+from ..workers import FetchWorker
 
 class AddStockDialog(QDialog):
     def __init__(self, parent=None):
@@ -59,8 +62,9 @@ class PortfolioWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.data_fetcher = DataFetcher()
-        self.portfolio_file = os.path.join('data', 'portfolio.json')
+        self.portfolio_file = os.path.join(Config.DATA_DIR, 'portfolio.json')
         self.portfolio = self.load_portfolio()
+        self.fetch_worker = None
         self.init_ui()
         self.update_portfolio()
         
@@ -123,8 +127,8 @@ class PortfolioWidget(QWidget):
             try:
                 with open(self.portfolio_file, 'r') as f:
                     return json.load(f)
-            except:
-                pass
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load portfolio from {self.portfolio_file}: {e}")
         return {}
         
     def save_portfolio(self):
@@ -139,37 +143,44 @@ class PortfolioWidget(QWidget):
         if dialog.exec():
             stock_info = dialog.get_stock_info()
             symbol = stock_info['symbol']
-            
-            # Verify stock exists
-            df = self.data_fetcher.get_stock_data(symbol, period='1d')
-            if df is None or df.empty:
-                QMessageBox.warning(self, "Error", f"Could not fetch data for symbol {symbol}")
-                return
-                
-            # Add to portfolio
-            if symbol in self.portfolio:
-                # Update existing position
-                existing_shares = self.portfolio[symbol]['shares']
-                existing_cost = existing_shares * self.portfolio[symbol]['purchase_price']
-                new_shares = stock_info['shares']
-                new_cost = new_shares * stock_info['purchase_price']
-                total_shares = existing_shares + new_shares
-                avg_price = (existing_cost + new_cost) / total_shares
-                
-                self.portfolio[symbol] = {
-                    'shares': total_shares,
-                    'purchase_price': avg_price
-                }
-            else:
-                # Add new position
-                self.portfolio[symbol] = {
-                    'shares': stock_info['shares'],
-                    'purchase_price': stock_info['purchase_price']
-                }
-            
-            self.save_portfolio()
-            self.update_portfolio()
-            
+
+            self._add_worker = FetchWorker(self.data_fetcher.get_stock_data, symbol, period='1d')
+            self._add_worker.finished.connect(
+                lambda df: self._on_add_stock_verified(symbol, stock_info, df))
+            self._add_worker.error.connect(
+                lambda msg: QMessageBox.warning(self, "Error", f"Could not fetch data for symbol {symbol}: {msg}"))
+            self._add_worker.start()
+
+    def _on_add_stock_verified(self, symbol: str, stock_info: dict, df):
+        """Finish adding the stock once its data has been verified off the GUI thread"""
+        if df is None or df.empty:
+            QMessageBox.warning(self, "Error", f"Could not fetch data for symbol {symbol}")
+            return
+
+        # Add to portfolio
+        if symbol in self.portfolio:
+            # Update existing position
+            existing_shares = self.portfolio[symbol]['shares']
+            existing_cost = existing_shares * self.portfolio[symbol]['purchase_price']
+            new_shares = stock_info['shares']
+            new_cost = new_shares * stock_info['purchase_price']
+            total_shares = existing_shares + new_shares
+            avg_price = (existing_cost + new_cost) / total_shares
+
+            self.portfolio[symbol] = {
+                'shares': total_shares,
+                'purchase_price': avg_price
+            }
+        else:
+            # Add new position
+            self.portfolio[symbol] = {
+                'shares': stock_info['shares'],
+                'purchase_price': stock_info['purchase_price']
+            }
+
+        self.save_portfolio()
+        self.update_portfolio()
+
     def remove_selected(self):
         """Remove selected stocks from portfolio"""
         selected_items = self.table.selectedItems()
@@ -188,28 +199,43 @@ class PortfolioWidget(QWidget):
         self.update_portfolio()
         
     def update_portfolio(self):
-        """Update portfolio display"""
+        """Refresh portfolio prices off the GUI thread, then re-render the table"""
+        if not self.portfolio:
+            self._render_portfolio({})
+            return
+
+        if self.fetch_worker is not None and self.fetch_worker.isRunning():
+            return
+
+        self.fetch_worker = FetchWorker(
+            self.data_fetcher.get_multiple_stocks, list(self.portfolio.keys()), period='1d'
+        )
+        self.fetch_worker.finished.connect(self._render_portfolio)
+        self.fetch_worker.error.connect(lambda msg: logger.error(f"Portfolio refresh error: {msg}"))
+        self.fetch_worker.start()
+
+    def _render_portfolio(self, price_data: dict):
+        """Rebuild the portfolio table from freshly fetched prices"""
         self.table.setRowCount(len(self.portfolio))
-        
+
         total_value = 0
         total_cost = 0
         row = 0
-        
+
         for symbol, data in self.portfolio.items():
-            # Get current price
-            df = self.data_fetcher.get_stock_data(symbol, period='1d')
+            df = price_data.get(symbol)
             if df is None or df.empty:
                 continue
-                
+
             current_price = df['Close'].iloc[-1]
             shares = data['shares']
             purchase_price = data['purchase_price']
-            
+
             market_value = shares * current_price
             cost_basis = shares * purchase_price
             gain_loss = market_value - cost_basis
-            return_pct = (gain_loss / cost_basis) * 100
-            
+            return_pct = (gain_loss / cost_basis) * 100 if cost_basis else 0
+
             # Update totals
             total_value += market_value
             total_cost += cost_basis

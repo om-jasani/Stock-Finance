@@ -14,7 +14,13 @@ def setup_logger(name: str = None) -> logging.Logger:
     if logger.handlers:
         return logger
         
-    logger.setLevel(getattr(logging, Config.LOG_LEVEL))
+    level = getattr(logging, Config.LOG_LEVEL.upper(), None)
+    if not isinstance(level, int):
+        logging.getLogger(name or __name__).warning(
+            f"Invalid LOG_LEVEL '{Config.LOG_LEVEL}', falling back to INFO"
+        )
+        level = logging.INFO
+    logger.setLevel(level)
     
     # Create formatters
     file_formatter = logging.Formatter(

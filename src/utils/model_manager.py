@@ -87,36 +87,36 @@ class ModelManager:
             model_info = self.metadata[model_id]
             if model_info['status'] != 'active':
                 return None
-                
-            model = StockPredictor(model_path=model_info['model_path'])
-            
+
+            model = StockPredictor(
+                model_path=model_info['model_path'],
+                scaler_path=model_info.get('scaler_path')
+            )
+
             if model.load_model():
                 return model
             return None
-            
+
         except Exception as e:
             logger.error(f"Error loading model {model_id}: {str(e)}")
             return None
-            
+
+    def get_latest_model_id(self, symbol: str) -> Optional[str]:
+        """Get the ID of the latest active model for a symbol, without loading it"""
+        try:
+            symbol_models = [
+                model_id for model_id, info in self.metadata.items()
+                if info['symbol'] == symbol and info['status'] == 'active'
+            ]
+            return max(symbol_models) if symbol_models else None
+        except Exception as e:
+            logger.error(f"Error getting latest model id for {symbol}: {str(e)}")
+            return None
+
     def get_latest_model(self, symbol: str) -> Optional[StockPredictor]:
         """Get latest model for symbol"""
-        try:
-            # Find all active models for symbol
-            symbol_models = {
-                model_id: info for model_id, info in self.metadata.items()
-                if info['symbol'] == symbol and info['status'] == 'active'
-            }
-            
-            if not symbol_models:
-                return None
-                
-            # Get latest model by timestamp
-            latest_id = max(symbol_models.keys())
-            return self.load_model(latest_id)
-            
-        except Exception as e:
-            logger.error(f"Error getting latest model for {symbol}: {str(e)}")
-            return None
+        latest_id = self.get_latest_model_id(symbol)
+        return self.load_model(latest_id) if latest_id else None
             
     def delete_model(self, model_id: str) -> bool:
         """Delete model"""
