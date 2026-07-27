@@ -1,0 +1,65 @@
+2024-12-10 17:20:22,212 - yfinance - ERROR - 404 Client Error: Not Found for url: https://query2.finance.yahoo.com/v10/finance/quoteSummary/NTPCGREEN.NS%5C?modules=financialData%2CquoteType%2CdefaultKeyStatistics%2CassetProfile%2CsummaryDetail&corsDomain=finance.yahoo.com&formatted=false&symbol=NTPCGREEN.NS%5C&crumb=vPmMIzM2HJQ
+2024-12-10 17:20:23,696 - yfinance - ERROR - NTPCGREEN.NS\: No data found, symbol may be delisted
+2024-12-10 17:20:23,697 - stock_analysis - WARNING - No data received for symbol NTPCGREEN.NS\
+2024-12-10 17:20:27,846 - yfinance - ERROR - NTPCGREEN.NS: Period '1y' is invalid, must be one of ['1d', '5d', '1mo', 'ytd', 'max']
+2024-12-10 17:20:27,846 - stock_analysis - WARNING - No data received for symbol NTPCGREEN.NS
+2024-12-10 17:21:09,803 - yfinance - ERROR - NTPCGREEN.NS: Period '1y' is invalid, must be one of ['1d', '5d', '1mo', 'ytd', 'max']
+2024-12-10 17:21:09,803 - stock_analysis - WARNING - No data received for symbol NTPCGREEN.NS
+2024-12-10 17:21:37,684 - yfinance - ERROR - NTPCGREEN.BO: Period '1y' is invalid, must be one of ['1d', '5d']
+2024-12-10 17:21:37,684 - stock_analysis - WARNING - No data received for symbol NTPCGREEN.BO
+2024-12-10 17:24:16,042 - yfinance - ERROR - NTPCGREEN.NS: Period '1y' is invalid, must be one of ['1d', '5d', '1mo', 'ytd', 'max']
+2024-12-10 17:24:16,042 - stock_analysis - WARNING - No data received for symbol NTPCGREEN.NS
+2024-12-10 17:24:43,442 - yfinance - ERROR - OLAELEC.NS: Period '1y' is invalid, must be one of ['1d', '5d', '1mo', '3mo', '6mo', 'ytd', 'max']
+2024-12-10 17:24:43,442 - stock_analysis - WARNING - No data received for symbol OLAELEC.NS
+2024-12-10 17:24:58,380 - yfinance - ERROR - OLAELEC.BO: Period '1y' is invalid, must be one of ['1d', '5d', '1mo', '3mo', '6mo', 'ytd', 'max']
+2024-12-10 17:24:58,380 - stock_analysis - WARNING - No data received for symbol OLAELEC.BO
+2024-12-10 17:29:57,870 - yfinance - ERROR - NTPCGREEN.NS: Period '3mo' is invalid, must be one of ['1d', '5d', '1mo', 'ytd', 'max']
+2024-12-10 17:29:57,870 - stock_analysis - WARNING - No data received for symbol NTPCGREEN.NS
+2024-12-10 17:30:08,288 - yfinance - ERROR - NTPCGREEN.NS: Period '3mo' is invalid, must be one of ['1d', '5d', '1mo', 'ytd', 'max']
+2024-12-10 17:30:08,288 - stock_analysis - WARNING - No data received for symbol NTPCGREEN.NS
+2024-12-10 17:30:28,971 - yfinance - ERROR - 404 Client Error: Not Found for url: https://query2.finance.yahoo.com/v10/finance/quoteSummary/OLAELEC%3ENS?modules=financialData%2CquoteType%2CdefaultKeyStatistics%2CassetProfile%2CsummaryDetail&corsDomain=finance.yahoo.com&formatted=false&symbol=OLAELEC%3ENS&crumb=wS5bOhtU8UO
+2024-12-10 17:30:31,092 - yfinance - ERROR - OLAELEC>NS: No data found, symbol may be delisted
+2024-12-10 17:30:31,092 - stock_analysis - WARNING - No data received for symbol OLAELEC>NS
+2024-12-10 17:30:51,127 - yfinance - ERROR - OLAELEC.NS: Period '1y' is invalid, must be one of ['1d', '5d', '1mo', '3mo', '6mo', 'ytd', 'max']
+2024-12-10 17:30:51,127 - stock_analysis - WARNING - No data received for symbol OLAELEC.NS
+2024-12-10 17:31:42,749 - yfinance - ERROR - 404 Client Error: Not Found for url: https://query2.finance.yahoo.com/v10/finance/quoteSummary/NTPCGREEN%3ENS?modules=financialData%2CquoteType%2CdefaultKeyStatistics%2CassetProfile%2CsummaryDetail&corsDomain=finance.yahoo.com&formatted=false&symbol=NTPCGREEN%3ENS&crumb=wS5bOhtU8UO
+2024-12-10 17:31:46,542 - yfinance - ERROR - NTPCGREEN>NS: No data found, symbol may be delisted
+2024-12-10 17:31:46,542 - stock_analysis - WARNING - No data received for symbol NTPCGREEN>NS
+2024-12-10 17:34:41,483 - yfinance - ERROR - NTPCGREE>NS: No data found, symbol may be delisted
+2024-12-10 17:34:41,483 - stock_analysis - WARNING - No data received for symbol NTPCGREE>NS
+2024-12-10 17:49:16,278 - yfinance - ERROR - NTPC.NS: 5m data not available for startTime=1670773756 and endTime=1733845756. The requested range must be within the last 60 days.
+2024-12-10 17:49:16,278 - stock_analysis - WARNING - No data received for symbol NTPC.NS
+2024-12-10 17:49:26,594 - yfinance - ERROR - NTPC.NS: 5m data not available for startTime=1717775366 and endTime=1733845766. The requested range must be within the last 60 days.
+2024-12-10 17:49:26,594 - stock_analysis - WARNING - No data received for symbol NTPC.NS
+2024-12-10 18:37:16,916 - yfinance - ERROR - GOOG: 15m data not available for startTime=1092922200 and endTime=1733848635. The requested range must be within the last 60 days.
+2024-12-10 18:37:16,916 - stock_analysis - WARNING - No data received for symbol GOOG
+2024-12-10 18:39:01,394 - yfinance - ERROR - DEEPAKFERT.NS: 2m data not available for startTime=1725813541 and endTime=1733848741. The requested range must be within the last 60 days.
+2024-12-10 18:39:01,394 - stock_analysis - WARNING - No data received for symbol DEEPAKFERT.NS
+2024-12-10 18:39:08,709 - yfinance - ERROR - DEEPAKFERT.NS: 15m data not available for startTime=1725813548 and endTime=1733848748. The requested range must be within the last 60 days.
+2024-12-10 18:39:08,709 - stock_analysis - WARNING - No data received for symbol DEEPAKFERT.NS
+2024-12-10 18:39:15,586 - yfinance - ERROR - DEEPAKFERT.NS: 15m data not available for startTime=1717778355 and endTime=1733848755. The requested range must be within the last 60 days.
+2024-12-10 18:39:15,586 - stock_analysis - WARNING - No data received for symbol DEEPAKFERT.NS
+2024-12-10 18:44:04,963 - yfinance - ERROR - DEEPAKFERT.NS: 15m data not available for startTime=1717778644 and endTime=1733849044. The requested range must be within the last 60 days.
+2024-12-10 18:44:04,963 - stock_analysis - WARNING - No data received for symbol DEEPAKFERT.NS
+2024-12-10 18:44:38,869 - yfinance - ERROR - DEEPAKFERT.NS: 15m data not available for startTime=1725813878 and endTime=1733849078. The requested range must be within the last 60 days.
+2024-12-10 18:44:38,869 - stock_analysis - WARNING - No data received for symbol DEEPAKFERT.NS
+2024-12-10 18:45:36,836 - yfinance - ERROR - $DEEPAKFERT.NS: possibly delisted; No price data found  (period=3mo)
+2024-12-10 18:45:36,836 - stock_analysis - WARNING - No data received for symbol DEEPAKFERT.NS
+2024-12-12 15:42:16,338 - yfinance - ERROR - 404 Client Error: Not Found for url: https://query2.finance.yahoo.com/v10/finance/quoteSummary/RELIANCE%3ENS?modules=financialData%2CquoteType%2CdefaultKeyStatistics%2CassetProfile%2CsummaryDetail&corsDomain=finance.yahoo.com&formatted=false&symbol=RELIANCE%3ENS&crumb=uVycgcM3fTv
+2024-12-12 15:42:17,823 - yfinance - ERROR - RELIANCE>NS: No data found, symbol may be delisted
+2024-12-12 15:42:17,823 - stock_analysis - WARNING - No data received for symbol RELIANCE>NS
+2024-12-12 15:43:52,300 - yfinance - ERROR - 404 Client Error: Not Found for url: https://query2.finance.yahoo.com/v10/finance/quoteSummary/NTPC%3ENS?modules=financialData%2CquoteType%2CdefaultKeyStatistics%2CassetProfile%2CsummaryDetail&corsDomain=finance.yahoo.com&formatted=false&symbol=NTPC%3ENS&crumb=uVycgcM3fTv
+2024-12-12 15:43:54,352 - yfinance - ERROR - NTPC>NS: No data found, symbol may be delisted
+2024-12-12 15:43:54,352 - stock_analysis - WARNING - No data received for symbol NTPC>NS
+2024-12-12 15:44:38,680 - yfinance - ERROR - NTPC.NS: Period '60d' is invalid, must be one of ['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max']
+2024-12-12 15:44:38,680 - stock_analysis - WARNING - No data received for symbol NTPC.NS
+2024-12-17 16:44:18,934 - yfinance - ERROR - NTPCGREEN.NS: 1m data not available for startTime=1732679100 and endTime=1734446659. Only 8 days worth of 1m granularity data are allowed to be fetched per request.
+2024-12-17 16:44:18,934 - stock_analysis - WARNING - No data received for symbol NTPCGREEN.NS
+2024-12-17 17:05:20,032 - yfinance - ERROR - TSLA: Period '3y' is invalid, must be one of ['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max']
+2024-12-17 17:05:20,032 - stock_analysis - WARNING - No data received for symbol TSLA
+2024-12-17 17:05:20,033 - stock_analysis - ERROR - Training error: No data available for TSLA
+2024-12-17 17:14:06,026 - yfinance - ERROR - 404 Client Error: Not Found for url: https://query2.finance.yahoo.com/v10/finance/quoteSummary/NSEI?modules=financialData%2CquoteType%2CdefaultKeyStatistics%2CassetProfile%2CsummaryDetail&corsDomain=finance.yahoo.com&formatted=false&symbol=NSEI&crumb=rKW0ws2gZlj
+2024-12-17 17:14:09,034 - yfinance - ERROR - NSEI: No data found, symbol may be delisted
+2024-12-17 17:14:09,035 - stock_analysis - WARNING - No data received for symbol NSEI
+2024-12-17 17:14:43,488 - yfinance - ERROR - %5ENSEI: 15m data not available for startTime=1718378083 and endTime=1734448483. The requested range must be within the last 60 days.
+2024-12-17 17:14:43,489 - stock_analysis - WARNING - No data received for symbol %5ENSEI

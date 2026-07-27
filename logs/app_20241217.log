@@ -1,0 +1,5 @@
+2024-12-17 16:44:18,934 - stock_analysis - WARNING - No data received for symbol NTPCGREEN.NS
+2024-12-17 17:05:20,032 - stock_analysis - WARNING - No data received for symbol TSLA
+2024-12-17 17:05:20,033 - stock_analysis - ERROR - Training error: No data available for TSLA
+2024-12-17 17:14:09,035 - stock_analysis - WARNING - No data received for symbol NSEI
+2024-12-17 17:14:43,489 - stock_analysis - WARNING - No data received for symbol %5ENSEI
